@@ -1,13 +1,8 @@
 💾 **Data Bank – SQL Case Study**
 📌 Project Overview
-
   The financial industry is rapidly evolving with the emergence of **Neo-Banks** — **fully digital banks** that operate without physical branches.
-  
   Inspired by this innovation, Danny envisioned a unique intersection between:
-
-💳 **Digital Banking
-₿ Cryptocurrency**
-📊 **Data Analytics**
+💳 **Digital Banking, ₿ Cryptocurrency**, 📊 **Data Analytics**
 
   This led to the creation of Data Bank — a next-generation platform that combines traditional banking services with a secure, distributed data storage system.
 
