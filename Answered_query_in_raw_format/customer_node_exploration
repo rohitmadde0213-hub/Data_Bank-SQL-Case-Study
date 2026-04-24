@@ -1,0 +1,51 @@
+use data_bank;
+
+#A. Customer Nodes Exploration
+
+#How many unique nodes are there on the Data Bank system?
+# Answer:
+select count(distinct node_id) from customer_nodesp;
+
+#What is the number of nodes per region?
+# Answer:
+select r.region_id, count(cn.node_id) count_of_node 
+from customer_nodes cn right join regions r 
+on r.region_id = cn.region_id
+group by r.region_id;
+
+#How many customers are allocated to each region?
+# Answer:
+select region_id, count(distinct customer_id) total_allocated_customer
+from customer_nodes
+group by region_id;
+
+
+#How many days on average are customers reallocated to a different node?
+# Answer:
+select round(avg(DATEDIFF(end_date, start_date)),2) as avg_reallocated_date
+from customer_nodes
+where year(end_date) != '9999-12-31';
+
+#What is the median, 80th and 95th percentile for this same reallocation days metric for each region?
+# Answer:
+WITH cte AS (
+  SELECT 
+    region_id,
+    DATEDIFF(end_date, start_date) AS days,
+    NTILE(100) OVER (
+      PARTITION BY region_id 
+      ORDER BY DATEDIFF(end_date, start_date)
+    ) AS bucket
+  FROM customer_nodes
+  WHERE end_date <> '9999-12-31'
+)
+SELECT 
+  region_id,
+  MAX(CASE WHEN bucket = 50 THEN days END) AS median,
+  MAX(CASE WHEN bucket = 80 THEN days END) AS p80,
+  MAX(CASE WHEN bucket = 95 THEN days END) AS p95
+FROM cte
+GROUP BY region_id;
+
+
+select * from customer_nodes
