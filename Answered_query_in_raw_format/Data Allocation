@@ -1,0 +1,334 @@
+
+#C. Data Allocation Challenge
+/*To test out a few different hypotheses - the Data Bank team wants to run an experiment where different groups of customers would be allocated data using 3 different options:
+
+Option 1: data is allocated based off the amount of money at the end of the previous month
+Option 2: data is allocated on the average amount of money kept in the account in the previous 30 days
+Option 3: data is updated real-time
+For this multi-part challenge question - you have been requested to generate the following data elements to help the Data Bank team estimate how much data will need to be provisioned for each option:
+
+running customer balance column that includes the impact each transaction
+customer balance at the end of each month
+minimum, average and maximum values of the running balance for each customer
+Using all of the data available - how much data would have been required for each option on a monthly basis?
+*/
+
+#Running Balance (Per Transaction):
+select 	*,
+		sum(case when txn_type = 'deposit' 
+        then txn_amount else - txn_amount end) 
+        over (partition by customer_id 
+        order by txn_date) running_sum
+from customer_transactions
+order by customer_id;
+
+
+#Monthly Closing Balance:
+with monthly_balances as
+(    SELECT 
+        EXTRACT(MONTH FROM txn_date) AS txn_month,  
+        customer_id,
+        SUM(CASE WHEN txn_type = 'deposit' THEN txn_amount ELSE - txn_amount END) AS net_monthly_amount
+    FROM customer_transactions
+    GROUP BY EXTRACT(MONTH FROM txn_date), customer_id
+)select txn_month, 
+        customer_id,
+        sum(net_monthly_amount) over (partition by customer_id order by txn_month) as closing_balance
+from monthly_balances         
+order by customer_id;
+
+
+#Min, Average, and Max Running Balance:
+
+with transaction_running_balance as
+(    SELECT 
+        customer_id,
+        txn_date,  
+        SUM(
+				CASE WHEN txn_type = 'deposit' THEN txn_amount ELSE - txn_amount END) 
+				over(partition by customer_id order by txn_date) AS running_balance
+    FROM customer_transactions
+)
+SELECT 
+    customer_id,
+    MIN(running_balance) AS min_running_balance,
+    ROUND(AVG(running_balance), 2) AS avg_running_balance,
+    MAX(running_balance) AS max_running_balance
+FROM transaction_running_balance
+GROUP BY customer_id
+ORDER BY customer_id;
+
+#Data allocated based on the amount of money at the end of the previous month
+
+with monthly_net As 
+(
+	select 
+			customer_id, 
+            extract(month from txn_date) as txn_month,
+            sum(
+				case when txn_type = 'deposit' then txn_amount else - txn_amount end
+				) as net_amount
+	from customer_transactions
+    GROUP BY customer_id, EXTRACT(MONTH FROM txn_date)
+),
+monthly_closing as 
+(
+	select 
+		customer_id,
+        txn_month,
+        sum(net_amount) over (partition by customer_id order by txn_month) as closing_month
+    from monthly_net
+),
+previous_month_balance as
+(
+	select 
+		customer_id,
+        txn_month,
+        lag(closing_month) over (partition by customer_id order by txn_month) as previous_closing_balance 
+	from monthly_closing
+)
+select txn_month,
+       sum(coalesce(previous_closing_balance, 0)) as total_allocation_option
+from previous_month_balance
+group by txn_month
+order by txn_month;
+
+
+#30-Day Average / Monthly Average Balance
+
+with transaction_running_balance As 
+(
+	select 
+			customer_id, 
+            extract(month from txn_date) as txn_date,
+            sum(
+				case when txn_type = 'deposit' then txn_amount else - txn_amount end
+				) over (partition by customer_id order by txn_date) as running_balance 
+	from customer_transactions
+),
+customer_monthly_average as
+(
+	select 
+		customer_id,
+        txn_date,
+        avg(running_balance) as avg_runinng_balance 
+	from transaction_running_balance
+	group by customer_id, txn_date
+)
+select txn_date, 
+		round(sum(avg_runinng_balance), 2) as total_option2_allocation
+from customer_monthly_average
+group by txn_date
+order by txn_date;
+
+#Real-Time Balance
+
+with transaction_running_balance As 
+(
+	select 
+			customer_id, 
+            extract(month from txn_date) as txn_date,
+            sum(
+				case when txn_type = 'deposit' then txn_amount else - txn_amount end
+				) over (partition by customer_id order by txn_date) as running_balance 
+	from customer_transactions
+)
+select txn_date,
+		sum(running_balance) as total_option3_allocation
+from transaction_running_balance
+group by txn_date
+order by txn_date;
+
+
+
+CREATE VIEW vw_databank_storage_analysis AS
+-- (Paste your final combined query for Options 1, 2, 3 and monthly metrics here) 
+
+#For Dashboard Purpuse
+
+with transaction_running_balance As 
+(
+	select 
+			customer_id, 
+            extract(month from txn_date) as txn_date,
+            sum(
+				case when txn_type = 'deposit' then txn_amount else - txn_amount end
+				) over (partition by customer_id order by txn_date) as running_balance 
+	from customer_transactions
+),
+monthly_total as
+(	select txn_date,
+			sum(running_balance) as total_option3_allocation
+	from transaction_running_balance
+	group by txn_date
+)
+select max(total_option3_allocation) as peak_storage
+from monthly_total;
+
+#active customer 
+SELECT COUNT(DISTINCT customer_id) AS active_customers
+FROM customer_transactions;
+
+#Avg Customer Allocation
+SELECT ROUND(AVG(avg_monthly_balance), 2) AS avg_customer_allocation
+FROM (
+    SELECT 
+        customer_id,
+        EXTRACT(MONTH FROM txn_date) AS txn_month,
+        AVG(running_balance) AS avg_monthly_balance
+    FROM transaction_running_balance
+    GROUP BY customer_id, EXTRACT(MONTH FROM txn_date)
+) AS customer_averages;
+
+select * 
+from vw_databank_storage_analysis;
+
+#total allocation
+
+WITH base_txns AS (
+    -- Step 1: Standardize transaction amounts (Deposits = positive, Withdrawals/Purchases = negative)
+    SELECT 
+        customer_id,
+        txn_date,
+        EXTRACT(MONTH FROM txn_date) AS txn_month,
+        CASE 
+            WHEN txn_type = 'deposit' THEN txn_amount 
+            ELSE -txn_amount 
+        END AS net_txn_amount
+    FROM customer_transactions
+),
+running_balances AS (
+    -- Step 2: Calculate real-time transaction-level running balance per customer
+    SELECT 
+        customer_id,
+        txn_date,
+        txn_month,
+        SUM(net_txn_amount) OVER (
+            PARTITION BY customer_id 
+            ORDER BY txn_date
+        ) AS running_balance
+    FROM base_txns
+),
+option3_monthly AS (
+    -- OPTION 3: Real-Time Balance (Sum of running balances per month)
+    SELECT 
+        txn_month,
+        SUM(running_balance) AS total_option3_allocation
+    FROM running_balances
+    GROUP BY txn_month
+),
+option2_monthly AS (
+    -- OPTION 2: 30-Day / Monthly Average Balance per customer, then summed globally
+    SELECT 
+        txn_month,
+        ROUND(SUM(avg_monthly_balance), 2) AS total_option2_allocation
+    FROM (
+        SELECT 
+            customer_id,
+            txn_month,
+            AVG(running_balance) AS avg_monthly_balance
+        FROM running_balances
+        GROUP BY customer_id, txn_month
+    ) AS cust_avg
+    GROUP BY txn_month
+),
+monthly_net AS (
+    -- Helper for Option 1: Sum net transactions per customer per month
+    SELECT 
+        customer_id,
+        txn_month,
+        SUM(net_txn_amount) AS net_amount
+    FROM base_txns
+    GROUP BY customer_id, txn_month
+),
+monthly_closing AS (
+    -- Helper for Option 1: Rolling monthly closing balance per customer
+    SELECT 
+        customer_id,
+        txn_month,
+        SUM(net_amount) OVER (
+            PARTITION BY customer_id 
+            ORDER BY txn_month
+        ) AS closing_balance
+    FROM monthly_net
+),
+previous_month_balance AS (
+    -- Helper for Option 1: Pull prior month's closing balance using LAG()
+    SELECT 
+        customer_id,
+        txn_month,
+        LAG(closing_balance) OVER (
+            PARTITION BY customer_id 
+            ORDER BY txn_month
+        ) AS prev_month_balance
+    FROM monthly_closing
+),
+option1_monthly AS (
+    -- OPTION 1: Previous Month-End Balance sum per month
+    SELECT 
+        txn_month,
+        SUM(COALESCE(prev_month_balance, 0)) AS total_option1_allocation
+    FROM previous_month_balance
+    GROUP BY txn_month
+)
+-- FINAL OUTPUT: Combine all three options side-by-side by month for Tableau
+SELECT 
+    m.txn_month,
+    COALESCE(o1.total_option1_allocation, 0) AS total_option1_allocation,
+    COALESCE(o2.total_option2_allocation, 0) AS total_option2_allocation,
+    COALESCE(o3.total_option3_allocation, 0) AS total_option3_allocation
+FROM (
+    SELECT DISTINCT txn_month FROM base_txns
+) m
+LEFT JOIN option1_monthly o1 ON m.txn_month = o1.txn_month
+LEFT JOIN option2_monthly o2 ON m.txn_month = o2.txn_month
+LEFT JOIN option3_monthly o3 ON m.txn_month = o3.txn_month
+ORDER BY m.txn_month;
+
+
+
+SELECT 
+    customer_id,
+    EXTRACT(MONTH FROM txn_date) AS txn_month,
+    AVG(running_balance) AS avg_monthly_balance
+FROM (
+    -- Subquery or CTE calculating your transaction running balances
+    SELECT 
+        customer_id,
+        txn_date,
+        SUM(CASE WHEN txn_type = 'deposit' THEN txn_amount ELSE -txn_amount END) OVER (
+            PARTITION BY customer_id 
+            ORDER BY txn_date
+        ) AS running_balance
+    FROM customer_transactions
+) AS t
+GROUP BY customer_id, txn_month;
+
+-- Customer-level balance summary for Tableau risk profiling
+WITH base_txns AS (
+    SELECT 
+        customer_id,
+        txn_date,
+        CASE 
+            WHEN txn_type = 'deposit' THEN txn_amount 
+            ELSE -txn_amount 
+        END AS net_txn_amount
+    FROM customer_transactions
+),
+running_balances AS (
+    SELECT 
+        customer_id,
+        txn_date,
+        SUM(net_txn_amount) OVER (
+            PARTITION BY customer_id 
+            ORDER BY txn_date
+        ) AS running_balance
+    FROM base_txns
+)
+SELECT 
+    customer_id,
+    ROUND(AVG(running_balance), 2) AS avg_customer_balance,
+    ROUND(MIN(running_balance), 2) AS min_customer_balance,
+    ROUND(MAX(running_balance), 2) AS max_customer_balance
+FROM running_balances
+GROUP BY customer_id;
